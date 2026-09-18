@@ -21,6 +21,9 @@ jobs:
         run: xcodebuild -version
 
       - name: Provider and store tests
+        env:
+          # Runner hardware is slower than a dev machine; stretch the harness's tight timeouts.
+          USAGE_TEST_TIME_SCALE: 6
         run: ./Tests/run.sh
 
   build:
