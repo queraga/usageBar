@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Darwin
+import OSLog
 
 enum UsageProviderError: LocalizedError {
     case executableMissing, launchFailed, initializationTimeout, malformedResponse
@@ -36,6 +37,7 @@ enum CodexExecutableResolver {
         }
         let fallback = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
         if valid(fallback) { return fallback }
+        AppLog.provider.error("No codex executable found in PATH, com.openai.codex, or /Applications/ChatGPT.app")
         throw UsageProviderError.executableMissing
     }
 
@@ -122,18 +124,29 @@ actor CodexUsageProvider: UsageProvider {
     }
 
     private func performFetch() async throws -> UsageSnapshot {
+        let started = ContinuousClock.now
         do {
             if !ready {
                 try start()
                 _ = try await request("initialize", params: ["clientInfo": ["name": "chatgpt_usage_menu", "title": "ChatGPT Usage", "version": "1.0"]], timeout: initializationSeconds)
                 try send(["method": "initialized"])
                 ready = true
+                AppLog.provider.log("App Server initialized in \(started.duration(to: .now).milliseconds, privacy: .public)ms")
             }
             let data = try await request("account/rateLimits/read", timeout: requestSeconds)
-            do { return try JSONDecoder().decode(CodexRateLimits.self, from: data).snapshot() }
+            do {
+                let snapshot = try JSONDecoder().decode(CodexRateLimits.self, from: data).snapshot()
+                AppLog.provider.log("""
+                    Usage read in \(started.duration(to: .now).milliseconds, privacy: .public)ms: \
+                    5h used \(snapshot.fiveHour.usedPercent, format: .fixed(precision: 0), privacy: .public)%, \
+                    week used \(snapshot.weekly.usedPercent, format: .fixed(precision: 0), privacy: .public)%
+                    """)
+                return snapshot
+            }
             catch let error as UsageProviderError { throw error }
             catch { throw UsageProviderError.malformedResponse }
         } catch {
+            AppLog.provider.error("Fetch failed after \(started.duration(to: .now).milliseconds, privacy: .public)ms: \(error.logLabel, privacy: .public)")
             disconnect(error)
             throw error
         }
@@ -168,12 +181,21 @@ actor CodexUsageProvider: UsageProvider {
         }
         // A dead child must produce an error, never terminate the parent with SIGPIPE.
         _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-        child.terminationHandler = { [weak self] _ in
+        child.terminationHandler = { [weak self] finished in
+            AppLog.provider.debug("""
+                pid \(finished.processIdentifier, privacy: .public) exited, \
+                status \(finished.terminationStatus, privacy: .public)
+                """)
             Task { await self?.exited(generation: token) }
         }
         process = child; input = stdin; output = stdout
         do { try child.run() }
-        catch { disconnect(UsageProviderError.launchFailed); throw UsageProviderError.launchFailed }
+        catch {
+            AppLog.provider.error("Could not launch \(executable.path, privacy: .public)")
+            disconnect(UsageProviderError.launchFailed)
+            throw UsageProviderError.launchFailed
+        }
+        AppLog.provider.log("Launched \(executable.path, privacy: .public) as pid \(child.processIdentifier, privacy: .public)")
     }
 
     private func send(_ message: [String: Any]) throws {
@@ -229,6 +251,8 @@ actor CodexUsageProvider: UsageProvider {
 
     private func timedOut(_ id: Int, initializing: Bool) {
         guard pending[id] != nil else { return }
+        let limit = initializing ? initializationSeconds : requestSeconds
+        AppLog.provider.error("Request \(id, privacy: .public) timed out after \(limit, format: .fixed(precision: 1), privacy: .public)s")
         disconnect(initializing ? UsageProviderError.initializationTimeout : UsageProviderError.requestTimeout)
     }
     private func exited(generation token: UUID) {
@@ -236,6 +260,12 @@ actor CodexUsageProvider: UsageProvider {
     }
 
     private func disconnect(_ error: Error) {
+        if process != nil {
+            AppLog.provider.debug("""
+                Disconnecting on \(error.logLabel, privacy: .public), \
+                \(self.pending.count, privacy: .public) request(s) pending
+                """)
+        }
         generation = UUID(); ready = false; buffer.removeAll()
         deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()
         let requests = pending.values; pending.removeAll()
