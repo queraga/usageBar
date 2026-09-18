@@ -106,8 +106,9 @@ Scripts/make-dmg.sh 0.2.0  # release/UsageBar-0.2.0.dmg
 ```
 
 Pull requests and pushes to `main` and `develop` run the tests and a Release build on GitHub
-Actions. Merging to `main` additionally packages the DMG and drafts a release for the version
-in `MARKETING_VERSION` — see [RELEASING.md](RELEASING.md).
+Actions. **Actions → CI → Run workflow** builds any branch on demand and attaches the DMG and
+zip as downloadable artifacts without publishing anything. Merging to `main` drafts a release
+for the version in `MARKETING_VERSION` — see [RELEASING.md](RELEASING.md).
 
 ## Architecture
 

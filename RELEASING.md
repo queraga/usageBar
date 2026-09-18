@@ -44,9 +44,24 @@ run in the Actions tab.
 Every build is also attached to its workflow run as an artifact, so you can test the exact
 binary a draft contains before publishing it.
 
-## Manual runs
+## Manual build, nothing published
 
-**Actions → Release → Run workflow** takes three optional inputs:
+**Actions → CI → Run workflow**, pick any branch or tag, and the run tests, builds, and
+packages both `UsageBar.dmg` and `UsageBar.app.zip` as an artifact named
+`UsageBar-<version>-build<run>`. Download it from the run's summary page; artifacts are kept
+for 30 days. `CI` has no release steps at all, so this can never publish anything.
+
+```bash
+gh workflow run ci.yml --ref my-branch   # or use the Actions tab
+gh run watch                             # then download from the run page
+```
+
+Use this to hand someone a build to try, or to check a change on real hardware without
+touching the Releases page.
+
+## Manual release runs
+
+**Actions → Release → Run workflow** does publish. It takes three optional inputs:
 
 - `version` — release something other than the project's current `MARKETING_VERSION`
 - `publish` — publish immediately instead of creating a draft

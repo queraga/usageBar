@@ -139,9 +139,10 @@ jobs:
           Scripts/make-dmg.sh "${{ steps.version.outputs.version }}" release/UsageBar.dmg
           ditto -c -k --keepParent release/UsageBar.app release/UsageBar.app.zip
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload build
+        uses: actions/upload-artifact@v4
         with:
-          name: UsageBar-${{ steps.version.outputs.version }}-${{ github.run_number }}
+          name: UsageBar-${{ steps.version.outputs.version }}-build${{ github.run_number }}
           path: |
             release/UsageBar.dmg
             release/UsageBar.app.zip
