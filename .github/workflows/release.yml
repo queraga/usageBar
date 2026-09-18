@@ -1,0 +1,187 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (defaults to MARKETING_VERSION in the Xcode project)'
+        required: false
+      publish:
+        description: 'Publish immediately instead of creating a draft'
+        type: boolean
+        default: false
+      refresh:
+        description: 'Rebuild and re-upload assets even if the version is already released'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Provider and store tests
+        env:
+          # Runner hardware is slower than a dev machine; stretch the harness's tight timeouts.
+          USAGE_TEST_TIME_SCALE: 6
+        run: ./Tests/run.sh
+
+  release:
+    name: Build & publish
+    needs: test
+    runs-on: macos-15
+    env:
+      # Optional Developer ID signing / notarization. Left empty, builds stay ad-hoc signed.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+      NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+      NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION#v}"
+          if [[ -z "$VERSION" ]]; then VERSION="$(Scripts/app-version.sh)"; fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+            echo "::error::'$VERSION' is not a semantic version like 1.2.3" && exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version $VERSION" >> "$GITHUB_STEP_SUMMARY"
+
+      # A version is released once. Bump MARKETING_VERSION in the Xcode project to ship the
+      # next one; merges that do not bump it are built and tested but publish nothing.
+      - name: Decide release mode
+        id: mode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          FORCE_REFRESH: ${{ github.event.inputs.refresh }}
+        run: |
+          STATE="$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo missing)"
+          case "$STATE" in
+            missing) MODE=create ;;   # first build of this version
+            true)    MODE=refresh ;;  # unpublished draft, keep it current
+            *)       MODE=skip ;;     # already published, leave it alone
+          esac
+          # Manual runs may overwrite an already published release on request.
+          if [[ "$FORCE_REFRESH" == "true" && "$STATE" != "missing" ]]; then MODE=refresh; fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          case "$MODE" in
+            create)  MESSAGE="Creating a release for $VERSION." ;;
+            refresh) MESSAGE="Updating the existing $VERSION release with this build." ;;
+            skip)    MESSAGE="$VERSION is already released - building only, publishing nothing." ;;
+          esac
+          echo "$MESSAGE" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Decide signing
+        id: signing
+        run: |
+          if [[ -n "$MACOS_CERTIFICATE" && "${{ steps.mode.outputs.mode }}" != "skip" ]]; then
+            echo "sign=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "sign=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import signing certificate
+        if: steps.signing.outputs.sign == 'true'
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Build Release app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          SIGN_IDENTITY: ${{ steps.signing.outputs.sign == 'true' && secrets.MACOS_SIGNING_IDENTITY || '-' }}
+          DEVELOPMENT_TEAM: ${{ secrets.NOTARY_TEAM_ID }}
+        run: Scripts/build.sh
+
+      - name: Notarize and staple the app
+        if: steps.signing.outputs.sign == 'true' && env.NOTARY_APPLE_ID != ''
+        run: |
+          ditto -c -k --keepParent release/UsageBar.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun stapler staple release/UsageBar.app
+
+      - name: Package DMG and zip
+        run: |
+          Scripts/make-dmg.sh "${{ steps.version.outputs.version }}" release/UsageBar.dmg
+          ditto -c -k --keepParent release/UsageBar.app release/UsageBar.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UsageBar-${{ steps.version.outputs.version }}-${{ github.run_number }}
+          path: |
+            release/UsageBar.dmg
+            release/UsageBar.app.zip
+          if-no-files-found: error
+
+      - name: Notarize and staple the DMG
+        if: steps.signing.outputs.sign == 'true' && env.NOTARY_APPLE_ID != ''
+        run: |
+          xcrun notarytool submit release/UsageBar.dmg --wait \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD"
+          xcrun stapler staple release/UsageBar.dmg
+          echo "NOTARIZED=true" >> "$GITHUB_ENV"
+
+      - name: Write release notes
+        if: steps.mode.outputs.mode != 'skip'
+        env:
+          NOTARIZED: ${{ env.NOTARIZED || 'false' }}
+        run: Scripts/release-notes.sh "${{ steps.version.outputs.version }}" release > "$RUNNER_TEMP/notes.md"
+
+      - name: Publish GitHub release
+        if: steps.mode.outputs.mode != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          PUBLISH_NOW: ${{ github.event.inputs.publish }}
+        run: |
+          ASSETS=(release/UsageBar.dmg release/UsageBar.app.zip)
+          if [[ "$MODE" == "refresh" ]]; then
+            gh release edit "$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release upload "$VERSION" "${ASSETS[@]}" --clobber
+          else
+            ARGS=(--title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --target "$GITHUB_SHA")
+            if [[ "$VERSION" == *-* ]]; then ARGS+=(--prerelease); fi
+            # Drafts stay invisible until reviewed and published by hand.
+            if [[ "$PUBLISH_NOW" != "true" ]]; then ARGS+=(--draft); fi
+            gh release create "$VERSION" "${ARGS[@]}" "${ASSETS[@]}"
+          fi
+          gh release view "$VERSION" --json url --jq '"Release: " + .url' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up keychain
+        if: always() && steps.signing.outputs.sign == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true

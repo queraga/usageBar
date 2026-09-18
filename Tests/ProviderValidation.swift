@@ -3,6 +3,13 @@ import Darwin
 
 @main
 struct ProviderValidation {
+    /// Timeouts and waits are deliberately tight so the timeout cases stay fast. Slower machines
+    /// (CI runners paying a cold interpreter start) stretch them via USAGE_TEST_TIME_SCALE.
+    static let timeScale = ProcessInfo.processInfo.environment["USAGE_TEST_TIME_SCALE"]
+        .flatMap(Double.init) ?? 1
+    static func seconds(_ value: Double) -> Double { value * timeScale }
+    static func nanoseconds(_ value: Double) -> UInt64 { UInt64(seconds(value) * 1_000_000_000) }
+
     static func main() async throws {
         if CommandLine.arguments.contains("--live") {
             let provider = CodexUsageProvider()
@@ -20,7 +27,7 @@ struct ProviderValidation {
         let base = URL(fileURLWithPath: CommandLine.arguments[1])
         let state = URL(fileURLWithPath: ProcessInfo.processInfo.environment["USAGE_TEST_STATE"]!)
         func make(_ mode: String) -> CodexUsageProvider {
-            CodexUsageProvider(executable: base.appendingPathComponent(mode), initializationTimeout: 0.4, requestTimeout: 0.4)
+            CodexUsageProvider(executable: base.appendingPathComponent(mode), initializationTimeout: seconds(0.4), requestTimeout: seconds(0.4))
         }
         func lines() throws -> [String] { try String(contentsOf: state, encoding: .utf8).split(separator: "\n").map(String.init) }
         let provider = make("good")
@@ -73,13 +80,13 @@ struct ProviderValidation {
         let store = UsageStore(provider:provider)
         store.startAutomaticRefresh(interval:100_000_000)
         store.startAutomaticRefresh(interval:100_000_000)
-        try? await Task.sleep(nanoseconds:450_000_000)
+        try? await Task.sleep(nanoseconds:nanoseconds(0.45))
         precondition(store.snapshot != nil)
         let after = (try! String(contentsOf:state, encoding:.utf8)).split(separator:"\n").filter{$0.hasPrefix("start")}.count
         precondition(after == before+1)
         await store.shutdown()
         let count = try! String(contentsOf:state, encoding:.utf8)
-        try? await Task.sleep(nanoseconds:150_000_000)
+        try? await Task.sleep(nanoseconds:nanoseconds(0.15))
         precondition(count == (try! String(contentsOf:state, encoding:.utf8)))
         let faulty = FailsAfterSuccess()
         let stale = UsageStore(provider:faulty)
