@@ -22,6 +22,14 @@ fi
 [[ "$PREVIOUS" != "$VERSION" ]] || PREVIOUS=""
 if [[ -n "$PREVIOUS" ]]; then RANGE="$PREVIOUS..$RANGE_END"; else RANGE="$RANGE_END"; fi
 
+if [[ "$VERSION" == *-* ]]; then
+  cat <<PRERELEASE
+> **Pre-release build for testing**, cut from \`${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}\`
+> at \`$(git rev-parse --short HEAD)\`. Not intended for general use.
+
+PRERELEASE
+fi
+
 CHANGES="$(git log --no-merges --reverse --pretty='- %s' "$RANGE")"
 [[ -n "$CHANGES" ]] || CHANGES="- Maintenance release."
 printf '%s\n\n' "$CHANGES"

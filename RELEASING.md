@@ -59,13 +59,40 @@ gh run watch                             # then download from the run page
 Use this to hand someone a build to try, or to check a change on real hardware without
 touching the Releases page.
 
+## Beta from `develop`
+
+To rehearse a release before anything reaches `main`: **Actions → Release → Run workflow**,
+pick the `develop` branch, set `channel` to `beta`, and run it.
+
+The version becomes the project's `MARKETING_VERSION` with a beta iteration appended —
+`0.2.0-beta1`, then `-beta2` on the next run, and so on. The number is one higher than the
+highest `<version>-betaN` already released, counting drafts, so consecutive runs never collide
+and the count restarts when you bump `MARKETING_VERSION`.
+
+A beta is **always a draft**, even if you tick `publish`:
+
+- draft releases are visible only to collaborators with push access, never to users
+- they do not appear in the Releases list for visitors, and `releases/latest` ignores them
+- no git tag is created, so nothing on `develop` is marked as shipped
+- the notes carry a "Pre-release build for testing" banner naming the branch and commit
+
+Download `UsageBar.dmg` from the draft to test it, then delete the draft when you are done —
+nothing else references it. Betas carry the full version in the app itself
+(`CFBundleShortVersionString` is `0.2.0-beta1`), so you can tell a beta from a final build in
+the About panel.
+
+Publishing from `main` is unaffected: `MARKETING_VERSION` stays `0.2.0`, so the merge to `main`
+still drafts a clean `0.2.0` whose changelog covers everything since the last published
+release.
+
 ## Manual release runs
 
-**Actions → Release → Run workflow** does publish. It takes three optional inputs:
+**Actions → Release → Run workflow** on `main` publishes. Its inputs:
 
-- `version` — release something other than the project's current `MARKETING_VERSION`
-- `publish` — publish immediately instead of creating a draft
-- `refresh` — rebuild and re-upload assets even if that version is already published
+- `channel` — `release` (default) or `beta`, as above
+- `version` — an exact version, overriding the channel
+- `publish` — publish immediately instead of creating a draft (ignored for betas)
+- `refresh` — rebuild and re-upload assets even if that version is already released
 
 ## Release notes
 

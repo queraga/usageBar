@@ -5,8 +5,13 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      channel:
+        description: 'beta appends -beta1, -beta2, ... to the project version and always drafts'
+        type: choice
+        options: [release, beta]
+        default: release
       version:
-        description: 'Version to release (defaults to MARKETING_VERSION in the Xcode project)'
+        description: 'Exact version to release (overrides the channel)'
         required: false
       publish:
         description: 'Publish immediately instead of creating a draft'
@@ -59,15 +64,25 @@ jobs:
       - name: Resolve version
         id: version
         env:
+          GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
+          CHANNEL: ${{ github.event.inputs.channel }}
         run: |
           VERSION="${INPUT_VERSION#v}"
+          if [[ -z "$VERSION" && "$CHANNEL" == "beta" ]]; then
+            # Number the beta against every version already released, drafts included.
+            EXISTING="$(
+              gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null || true
+              git tag -l
+            )"
+            VERSION="$(printf '%s\n' "$EXISTING" | Scripts/next-beta.sh "$(Scripts/app-version.sh)" -)"
+          fi
           if [[ -z "$VERSION" ]]; then VERSION="$(Scripts/app-version.sh)"; fi
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
             echo "::error::'$VERSION' is not a semantic version like 1.2.3" && exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Releasing version $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "Releasing version $VERSION from ${GITHUB_REF_NAME}." >> "$GITHUB_STEP_SUMMARY"
 
       # A version is released once. Bump MARKETING_VERSION in the Xcode project to ship the
       # next one; merges that do not bump it are built and tested but publish nothing.
@@ -177,8 +192,9 @@ jobs:
           else
             ARGS=(--title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --target "$GITHUB_SHA")
             if [[ "$VERSION" == *-* ]]; then ARGS+=(--prerelease); fi
-            # Drafts stay invisible until reviewed and published by hand.
-            if [[ "$PUBLISH_NOW" != "true" ]]; then ARGS+=(--draft); fi
+            # Drafts stay invisible until reviewed and published by hand, and a beta is never
+            # anything but a draft - it exists for testing, not for users.
+            if [[ "$PUBLISH_NOW" != "true" || "$VERSION" == *-beta* ]]; then ARGS+=(--draft); fi
             gh release create "$VERSION" "${ARGS[@]}" "${ASSETS[@]}"
           fi
           gh release view "$VERSION" --json url --jq '"Release: " + .url' >> "$GITHUB_STEP_SUMMARY"
