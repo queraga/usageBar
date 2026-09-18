@@ -1,5 +1,9 @@
 # UsageBar
 
+<p align="center">
+  <img src="IconSource/UsageBar-1024.png" width="160" height="160" alt="UsageBar app icon">
+</p>
+
 Your AI usage limits, right in the macOS menu bar.
 
 **Currently supported: OpenAI Work & Codex**
