@@ -7,7 +7,11 @@
 <p align="center">
   <a href="https://github.com/queraga/usageBar/releases/latest"><img src="https://img.shields.io/github/v/release/queraga/usageBar?label=download&sort=semver" alt="Latest release"></a>
   <a href="https://github.com/queraga/usageBar/actions/workflows/release.yml"><img src="https://github.com/queraga/usageBar/actions/workflows/release.yml/badge.svg?branch=main" alt="Build status on main"></a>
+<a href="https://github.com/queraga/usageBar/actions/workflows/ci.yml">
+  <img src="https://github.com/queraga/usageBar/actions/workflows/ci.yml/badge.svg" alt="CI status">
+</a>
 </p>
+
 
 Your AI usage limits, right in the macOS menu bar.
 
