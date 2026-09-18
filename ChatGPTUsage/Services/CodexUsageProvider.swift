@@ -21,6 +21,15 @@ enum UsageProviderError: LocalizedError {
         case .serverRejected: return "Codex could not retrieve usage. Try refreshing."
         }
     }
+
+    /// Broken setup rather than bad luck: retrying cannot fix these, so a failure on the very
+    /// first refresh is fatal. Timeouts, auth and server errors stay recoverable in place.
+    var isSetupFailure: Bool {
+        switch self {
+        case .executableMissing, .launchFailed, .serverExited: return true
+        default: return false
+        }
+    }
 }
 
 enum CodexExecutableResolver {

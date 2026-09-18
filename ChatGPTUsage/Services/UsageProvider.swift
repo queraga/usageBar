@@ -22,7 +22,12 @@ enum AppLog {
     /// Launched from Finder or launchd there is no tty and nothing is written.
     static func terminal(_ message: @autoclosure () -> String) {
         guard isatty(STDERR_FILENO) == 1 else { return }
-        FileHandle.standardError.write(Data((message() + "\n").utf8))
+        write(message())
+    }
+
+    /// Unconditional stderr, for output the user asked for explicitly such as --check.
+    static func write(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 }
 
