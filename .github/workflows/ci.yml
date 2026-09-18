@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  # Actions -> CI -> Run workflow builds any branch or tag on demand. It never publishes
+  # a release: the DMG and zip are attached to the run as downloadable artifacts.
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Provider and store tests
+        env:
+          # Runner hardware is slower than a dev machine; stretch the harness's tight timeouts.
+          USAGE_TEST_TIME_SCALE: 6
+        run: ./Tests/run.sh
+
+  build:
+    name: Build
+    needs: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: echo "version=$(Scripts/app-version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Build Release app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: Scripts/build.sh
+
+      - name: Package DMG and zip
+        run: |
+          Scripts/make-dmg.sh "${{ steps.version.outputs.version }}" release/UsageBar.dmg
+          ditto -c -k --keepParent release/UsageBar.app release/UsageBar.app.zip
+
+      # The same two assets a release carries, downloadable from the run's summary page.
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsageBar-${{ steps.version.outputs.version }}-build${{ github.run_number }}
+          path: |
+            release/UsageBar.dmg
+            release/UsageBar.app.zip
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize
+        run: |
+          echo "Built UsageBar ${{ steps.version.outputs.version }} (build ${{ github.run_number }})." \
+            "Downloadable above as an artifact - nothing was published to Releases." \
+            >> "$GITHUB_STEP_SUMMARY"
