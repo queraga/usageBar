@@ -1,0 +1,46 @@
+// !$*UTF8*$!
+{
+archiveVersion = 1;
+classes = {};
+objectVersion = 56;
+objects = {
+A00000000000000000000001 = { isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+A00000000000000000000002 = { isa = PBXBuildFile; fileRef = A00000000000000000000001; };
+A00000000000000000000003 = { isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000002); runOnlyForDeploymentPostprocessing = 0; };
+
+0CBFFC056A381C87C68F460D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Services/CodexUsageProvider.swift"; sourceTree = "<group>"; };
+E744270412B0969488EF2C5B = { isa = PBXBuildFile; fileRef = 0CBFFC056A381C87C68F460D; };
+84F8D0172C6C39439F83E62E = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatGPTUsageApp.swift"; sourceTree = "<group>"; };
+E7521B921D5D60009A14E1EA = { isa = PBXBuildFile; fileRef = 84F8D0172C6C39439F83E62E; };
+1085AF2905912A2A78E57069 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Models/UsageModels.swift"; sourceTree = "<group>"; };
+5AFB2E87FA63DBED18CE92ED = { isa = PBXBuildFile; fileRef = 1085AF2905912A2A78E57069; };
+C4812BFCA21B4250396ACAEC = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Services/UsageProvider.swift"; sourceTree = "<group>"; };
+6CB63964AFC6F3D6FCE9144A = { isa = PBXBuildFile; fileRef = C4812BFCA21B4250396ACAEC; };
+A853D96F4D97B03CB4CC7936 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Services/MockUsageProvider.swift"; sourceTree = "<group>"; };
+4EC5274E5F12B113539757CD = { isa = PBXBuildFile; fileRef = A853D96F4D97B03CB4CC7936; };
+AB80C6C25A44DF5C2559276C = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Store/UsageStore.swift"; sourceTree = "<group>"; };
+B0C5A3D36DAA823D87CB249C = { isa = PBXBuildFile; fileRef = AB80C6C25A44DF5C2559276C; };
+94B61B46B6A2380353E1F4B4 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/MenuBarLabel.swift"; sourceTree = "<group>"; };
+92E43042129A5D9A5A7B2AFD = { isa = PBXBuildFile; fileRef = 94B61B46B6A2380353E1F4B4; };
+CDB3D0E69121FB69C30DAB3D = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/UsageRow.swift"; sourceTree = "<group>"; };
+533AC0D31E57DEF290833665 = { isa = PBXBuildFile; fileRef = CDB3D0E69121FB69C30DAB3D; };
+2DE499AC33C1784A607E3B99 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/SettingsView.swift"; sourceTree = "<group>"; };
+617285B03676007D179959DD = { isa = PBXBuildFile; fileRef = 2DE499AC33C1784A607E3B99; };
+D12CFB0418E8414B1B4C27B9 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Views/UsagePopover.swift"; sourceTree = "<group>"; };
+0091AFE7E679A345E5F9123D = { isa = PBXBuildFile; fileRef = D12CFB0418E8414B1B4C27B9; };
+7D1043473D55BFA90E8530D3 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = UsageBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+B28B7AF69320201D1CF206EB = { isa = PBXGroup; children = (828D338A9B04221C9CBE286F, FBDC4F23F93125BBEEAE800C); sourceTree = "<group>"; };
+828D338A9B04221C9CBE286F = { isa = PBXGroup; children = (A00000000000000000000001, 0CBFFC056A381C87C68F460D, 84F8D0172C6C39439F83E62E, 1085AF2905912A2A78E57069, C4812BFCA21B4250396ACAEC, A853D96F4D97B03CB4CC7936, AB80C6C25A44DF5C2559276C, 94B61B46B6A2380353E1F4B4, CDB3D0E69121FB69C30DAB3D, 2DE499AC33C1784A607E3B99, D12CFB0418E8414B1B4C27B9); path = ChatGPTUsage; sourceTree = "<group>"; };
+FBDC4F23F93125BBEEAE800C = { isa = PBXGroup; children = (7D1043473D55BFA90E8530D3); name = Products; sourceTree = "<group>"; };
+BCE16DD0260827ECF338C787 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (E744270412B0969488EF2C5B, E7521B921D5D60009A14E1EA, 5AFB2E87FA63DBED18CE92ED, 6CB63964AFC6F3D6FCE9144A, 4EC5274E5F12B113539757CD, B0C5A3D36DAA823D87CB249C, 92E43042129A5D9A5A7B2AFD, 533AC0D31E57DEF290833665, 617285B03676007D179959DD, 0091AFE7E679A345E5F9123D); runOnlyForDeploymentPostprocessing = 0; };
+0E8A3AD980EC179856012B7E = { isa = PBXNativeTarget; buildConfigurationList = C57128001CE614BF8549D6BB; buildPhases = (BCE16DD0260827ECF338C787, A00000000000000000000003); buildRules = (); dependencies = (); name = UsageBar; productName = UsageBar; productReference = 7D1043473D55BFA90E8530D3; productType = "com.apple.product-type.application"; };
+98F54143AB4E86B28C3AFEE0 = { isa = PBXProject; attributes = { LastUpgradeCheck = 1600; }; buildConfigurationList = 862894B703A6DEDF96A9DD6C; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; knownRegions = (en, Base); mainGroup = B28B7AF69320201D1CF206EB; productRefGroup = FBDC4F23F93125BBEEAE800C; projectDirPath = ""; projectRoot = ""; targets = (0E8A3AD980EC179856012B7E); };
+89E1FD6268CC0F221A2BE178 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 13.0; SDKROOT = macosx; ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; }; name = Debug; };
+E6DE6C99132752C914FEF632 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 13.0; SDKROOT = macosx; ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
+862894B703A6DEDF96A9DD6C = { isa = XCConfigurationList; buildConfigurations = (89E1FD6268CC0F221A2BE178, E6DE6C99132752C914FEF632); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+7082CC0B6FC1282FCEABD07A = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 13.0; SDKROOT = macosx; ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; INFOPLIST_KEY_CFBundleDisplayName = UsageBar; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; PRODUCT_BUNDLE_IDENTIFIER = local.usagebar; PRODUCT_NAME = "$(TARGET_NAME)"; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; MARKETING_VERSION = 0.1.0; CURRENT_PROJECT_VERSION = 1; }; name = Debug; };
+639A7CA24D39909E713B47F7 = { isa = XCBuildConfiguration; buildSettings = { MACOSX_DEPLOYMENT_TARGET = 13.0; SDKROOT = macosx; ALWAYS_SEARCH_USER_PATHS = NO; SWIFT_VERSION = 5.0; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_LSUIElement = YES; INFOPLIST_KEY_CFBundleDisplayName = UsageBar; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; PRODUCT_BUNDLE_IDENTIFIER = local.usagebar; PRODUCT_NAME = "$(TARGET_NAME)"; CODE_SIGN_STYLE = Automatic; CODE_SIGN_IDENTITY = "-"; MARKETING_VERSION = 0.1.0; CURRENT_PROJECT_VERSION = 1; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
+C57128001CE614BF8549D6BB = { isa = XCConfigurationList; buildConfigurations = (7082CC0B6FC1282FCEABD07A, 639A7CA24D39909E713B47F7); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+};
+rootObject = 98F54143AB4E86B28C3AFEE0;
+}
