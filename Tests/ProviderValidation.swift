@@ -17,7 +17,7 @@ struct ProviderValidation {
             do {
                 for _ in 0..<2 {
                     let s = try await provider.fetchUsage()
-                    print("Real: 5h left=\(s.fiveHour.remainingPercent), week left=\(s.weekly.remainingPercent), resets=\(s.fiveHour.resetAt!), \(s.weekly.resetAt!)")
+                    print("Real: 5h left=\(s.fiveHour?.remainingPercent as Any), week left=\(s.weekly?.remainingPercent as Any)")
                 }
             } catch { await provider.shutdown(); throw error }
             await provider.shutdown()
@@ -34,7 +34,7 @@ struct ProviderValidation {
         async let a = provider.fetchUsage()
         async let b = provider.fetchUsage()
         let snapshots = try await [a,b]
-        precondition(snapshots.allSatisfy { $0.fiveHour.remainingPercent == 75 && $0.weekly.remainingPercent == 58 })
+        precondition(snapshots.allSatisfy { $0.fiveHour?.remainingPercent == 75 && $0.weekly?.remainingPercent == 58 })
         _ = try await provider.fetchUsage()
         let log = try lines()
         precondition(log.filter { $0.hasPrefix("start") }.count == 1)
@@ -66,12 +66,30 @@ struct ProviderValidation {
         await reconnect.shutdown()
         print("PASS: recovery on next refresh")
         let fallback = #"{"rateLimits":{"primary":null,"secondary":null},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":57,"windowDurationMins":10080,"resetsAt":1789910299},"secondary":{"usedPercent":47,"windowDurationMins":300,"resetsAt":1789585715}}}}"#
-        let decoded = try JSONDecoder().decode(CodexRateLimits.self,from:Data(fallback.utf8)).snapshot()
-        precondition(decoded.fiveHour.remainingPercent == 53)
-        for raw in [fallback.replacingOccurrences(of:"57",with:"157"), fallback.replacingOccurrences(of:"10080",with:"60")] {
-            do { _ = try JSONDecoder().decode(CodexRateLimits.self,from:Data(raw.utf8)).snapshot(); fatalError() } catch {}
+        func snapshot(_ raw: String) throws -> UsageSnapshot {
+            try JSONDecoder().decode(CodexRateLimits.self, from: Data(raw.utf8)).snapshot()
+        }
+        let decoded = try snapshot(fallback)
+        precondition(decoded.fiveHour?.remainingPercent == 53 && decoded.weekly?.remainingPercent == 43)
+        // Out-of-range usage and two windows claiming the same duration stay fatal.
+        for raw in [fallback.replacingOccurrences(of:"57",with:"157"),
+                    fallback.replacingOccurrences(of:"10080",with:"300")] {
+            do { _ = try snapshot(raw); fatalError("Expected failure") } catch {}
         }
         print("PASS: fallback selection and malformed metric rejection")
+        // An account reporting only one of the two windows is valid, not an error: the other
+        // window is simply absent. Unknown durations are ignored the same way.
+        let weeklyOnly = try snapshot(#"{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1790531876},"secondary":null}}"#)
+        precondition(weeklyOnly.weekly?.remainingPercent == 88 && weeklyOnly.fiveHour == nil)
+        let fiveHourOnly = try snapshot(fallback.replacingOccurrences(of:"10080",with:"60"))
+        precondition(fiveHourOnly.fiveHour?.remainingPercent == 53 && fiveHourOnly.weekly == nil)
+        // Nothing recognizable at all still fails, rather than publishing an empty snapshot.
+        for raw in [#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":60,"resetsAt":null},"secondary":null}}"#,
+                    #"{"rateLimits":{"primary":null,"secondary":null}}"#] {
+            do { _ = try snapshot(raw); fatalError("Expected failure") }
+            catch { precondition(String(describing:error) == "windowsMissing", "Unexpected \(error)") }
+        }
+        print("PASS: partial windows accepted, unusable responses rejected")
         await testStore(base:base,state:state)
     }
     @MainActor static func testStore(base:URL,state:URL) async {
