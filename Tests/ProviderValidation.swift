@@ -26,6 +26,7 @@ struct ProviderValidation {
         }
         let base = URL(fileURLWithPath: CommandLine.arguments[1])
         let state = URL(fileURLWithPath: ProcessInfo.processInfo.environment["USAGE_TEST_STATE"]!)
+        try testExecutableDiscovery(in: base)
         func make(_ mode: String) -> CodexUsageProvider {
             CodexUsageProvider(executable: base.appendingPathComponent(mode), initializationTimeout: seconds(0.4), requestTimeout: seconds(0.4))
         }
@@ -73,6 +74,66 @@ struct ProviderValidation {
         }
         print("PASS: fallback selection and malformed metric rejection")
         await testStore(base:base,state:state)
+    }
+
+    static func testExecutableDiscovery(in base: URL) throws {
+        let root = base.deletingLastPathComponent().appendingPathComponent("resolver")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        func executable(_ url: URL, version: String = "codex-cli 1.2.3", status: Int = 0) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "#!/bin/sh\necho '\(version)'\nexit \(status)\n".write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        func app(_ name: String) -> URL { root.appendingPathComponent(name + ".app", isDirectory: true) }
+        func current(_ application: URL) -> URL {
+            application.appendingPathComponent("Contents/Resources/codex-cli/bin/codex")
+        }
+        func legacy(_ application: URL) -> URL {
+            application.appendingPathComponent("Contents/Resources/codex")
+        }
+
+        let currentApp = app("Current")
+        try executable(current(currentApp))
+        let currentResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [currentApp], standaloneDirectories: [])
+        precondition(currentResolved.path == current(currentApp).path)
+
+        let legacyApp = app("Legacy")
+        try executable(legacy(legacyApp))
+        let legacyResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [legacyApp], standaloneDirectories: [])
+        precondition(legacyResolved.path == legacy(legacyApp).path)
+
+        let fallbackApp = app("BrokenCurrent")
+        try executable(current(fallbackApp), version: "broken installation", status: 1)
+        try executable(legacy(fallbackApp))
+        let fallbackResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [fallbackApp], standaloneDirectories: [])
+        precondition(fallbackResolved.path == legacy(fallbackApp).path)
+
+        let brokenStandalone = root.appendingPathComponent("broken-bin", isDirectory: true)
+        try executable(brokenStandalone.appendingPathComponent("codex"), version: "missing native binary", status: 127)
+        do {
+            _ = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [brokenStandalone])
+            fatalError("Broken standalone Codex was accepted")
+        } catch UsageProviderError.executableMissing {}
+        catch { fatalError("Unexpected discovery error: \(error)") }
+
+        let validStandalone = root.appendingPathComponent("valid-bin", isDirectory: true)
+        try executable(validStandalone.appendingPathComponent("codex"))
+        let standaloneResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [brokenStandalone, validStandalone])
+        precondition(standaloneResolved.path == validStandalone.appendingPathComponent("codex").path)
+
+        do {
+            _ = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [])
+            fatalError("Missing Codex did not report an error")
+        } catch UsageProviderError.executableMissing {}
+        catch { fatalError("Unexpected discovery error: \(error)") }
+
+        let futureApp = app("Future")
+        let future = futureApp.appendingPathComponent("Contents/Resources/runtime/tools/codex")
+        try executable(future)
+        let futureResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [futureApp], standaloneDirectories: [])
+        precondition(futureResolved.resolvingSymlinksInPath().path == future.resolvingSymlinksInPath().path)
+        print("PASS: executable discovery layouts, validation fallback, standalone, missing, and controlled search")
     }
     @MainActor static func testStore(base:URL,state:URL) async {
         let provider = CodexUsageProvider(executable:base.appendingPathComponent("good"))

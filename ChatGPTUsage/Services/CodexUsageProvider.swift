@@ -33,27 +33,151 @@ enum UsageProviderError: LocalizedError {
 }
 
 enum CodexExecutableResolver {
+    private static let currentBundlePath = "Contents/Resources/codex-cli/bin/codex"
+    private static let legacyBundlePath = "Contents/Resources/codex"
+    private static let maximumResourceSearchDepth = 4
+
     static func resolve() throws -> URL {
-        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + ["/opt/homebrew/bin", "/usr/local/bin", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path]
-        for directory in paths where directory.hasPrefix("/") {
-            let url = URL(fileURLWithPath: directory).appendingPathComponent("codex")
-            if valid(url) { return url }
+        try resolve(
+            chatGPTApplications: installedChatGPTApplications(),
+            standaloneDirectories: installedStandaloneDirectories()
+        )
+    }
+
+    /// The explicit inputs make discovery deterministic and keep tests independent of software
+    /// installed on the developer's Mac.
+    static func resolve(
+        chatGPTApplications: [URL],
+        standaloneDirectories: [URL],
+        validationTimeout: TimeInterval = 2
+    ) throws -> URL {
+        for application in unique(chatGPTApplications) {
+            AppLog.provider.log("ChatGPT app located at \(application.path, privacy: .public)")
+            let candidates = bundleCandidates(in: application)
+            for (candidate, strategy) in candidates {
+                if validate(candidate, timeout: validationTimeout) {
+                    AppLog.provider.log("Selected Codex at \(candidate.path, privacy: .public) via \(strategy, privacy: .public)")
+                    return candidate
+                }
+            }
         }
-        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-            let url = app.appendingPathComponent("Contents/Resources/codex")
-            if valid(url) { return url }
+        if chatGPTApplications.isEmpty {
+            AppLog.provider.notice("ChatGPT app was not located")
         }
-        let fallback = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
-        if valid(fallback) { return fallback }
-        AppLog.provider.error("No codex executable found in PATH, com.openai.codex, or /Applications/ChatGPT.app")
+
+        for directory in unique(standaloneDirectories) {
+            let candidate = directory.appendingPathComponent("codex")
+            if validate(candidate, timeout: validationTimeout) {
+                AppLog.provider.log("Selected standalone Codex at \(candidate.path, privacy: .public)")
+                return candidate
+            }
+        }
+
+        AppLog.provider.error("No working Codex executable found after validating bundled and standalone candidates")
         throw UsageProviderError.executableMissing
     }
 
-    private static func valid(_ url: URL) -> Bool {
+    private static func installedChatGPTApplications() -> [URL] {
+        var applications: [URL] = []
+        if let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
+            applications.append(application)
+        }
+        // Keep the conventional installation location as a fallback when Launch Services has
+        // not indexed the app yet. Internal executable paths are resolved separately below.
+        let conventional = URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true)
+        if FileManager.default.fileExists(atPath: conventional.path) {
+            applications.append(conventional)
+        }
+        return unique(applications)
+    }
+
+    private static func installedStandaloneDirectories() -> [URL] {
+        let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { $0.hasPrefix("/") }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return unique(pathDirectories + [
+            URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
+            URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin", isDirectory: true)
+        ])
+    }
+
+    private static func bundleCandidates(in application: URL) -> [(URL, String)] {
+        let current = application.appendingPathComponent(currentBundlePath)
+        let legacy = application.appendingPathComponent(legacyBundlePath)
+        var candidates = [(current, "current ChatGPT layout"), (legacy, "legacy ChatGPT layout")]
+        let knownPaths = Set(candidates.map { $0.0.standardizedFileURL.path })
+        let resources = application.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let resourceDepth = resources.standardizedFileURL.pathComponents.count
+        guard let enumerator = FileManager.default.enumerator(
+            at: resources,
+            includingPropertiesForKeys: [.isRegularFileKey, .isExecutableKey],
+            options: [.skipsHiddenFiles]
+        ) else { return candidates }
+
+        var discovered: [URL] = []
+        for case let url as URL in enumerator {
+            let depth = url.standardizedFileURL.pathComponents.count - resourceDepth
+            if depth > maximumResourceSearchDepth {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard url.lastPathComponent == "codex", !knownPaths.contains(url.standardizedFileURL.path) else { continue }
+            discovered.append(url)
+        }
+        candidates.append(contentsOf: discovered.sorted { $0.path < $1.path }.map { ($0, "controlled Resources search") })
+        return candidates
+    }
+
+    private static func validate(_ url: URL, timeout: TimeInterval) -> Bool {
+        AppLog.provider.debug("Considering Codex candidate \(url.path, privacy: .public)")
         var directory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: url.path, isDirectory: &directory)
-            && !directory.boolValue && FileManager.default.isExecutableFile(atPath: url.path)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
+              !directory.boolValue,
+              FileManager.default.isExecutableFile(atPath: url.path) else {
+            AppLog.provider.debug("Rejected missing or non-executable candidate \(url.path, privacy: .public)")
+            return false
+        }
+
+        let process = Process()
+        let stdout = Pipe(), stderr = Pipe()
+        process.executableURL = url
+        process.arguments = ["--version"]
+        process.standardOutput = stdout
+        process.standardError = stderr
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() }
+        catch {
+            AppLog.provider.error("Rejected candidate that could not launch: \(url.path, privacy: .public)")
+            return false
+        }
+
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            if finished.wait(timeout: .now() + 0.2) != .success, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            AppLog.provider.error("Rejected candidate whose --version timed out: \(url.path, privacy: .public)")
+            return false
+        }
+
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+            + stderr.fileHandleForReading.readDataToEndOfFile()
+        let version = String(data: output, encoding: .utf8)?.lowercased() ?? ""
+        guard process.terminationStatus == 0, version.contains("codex") else {
+            AppLog.provider.error("Rejected candidate whose --version validation failed: \(url.path, privacy: .public)")
+            return false
+        }
+        AppLog.provider.debug("Validated Codex candidate \(url.path, privacy: .public)")
+        return true
+    }
+
+    private static func unique(_ urls: [URL]) -> [URL] {
+        var paths = Set<String>()
+        return urls.filter { paths.insert($0.standardizedFileURL.path).inserted }
     }
 }
 
