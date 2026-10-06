@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// Shown when the account does not report that window at all, which is not an error.
+struct UnavailableRow: View {
+    let title: String
+
+    var body: some View {
+        HStack {
+            Text(title).fontWeight(.medium).foregroundStyle(.secondary)
+            Spacer()
+            Text("not reported").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct UsageRow: View {
     let title: String
     let metric: UsageMetric

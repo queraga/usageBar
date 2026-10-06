@@ -192,9 +192,17 @@ struct CodexRateLimits: Decodable {
         let primary: Window?
         let secondary: Window?
         var windows: [Window] { [primary, secondary].compactMap { $0 } }
-        var hasRequiredWindows: Bool {
-            windows.filter { $0.windowDurationMins == 300 }.count == 1
-                && windows.filter { $0.windowDurationMins == 10080 }.count == 1
+
+        /// Exactly one window per duration, so an ambiguous pair is never silently halved.
+        func window(_ minutes: Int) throws -> Window? {
+            let matches = windows.filter { $0.windowDurationMins == minutes }
+            guard matches.count <= 1 else { throw UsageProviderError.windowsMissing }
+            return matches.first
+        }
+
+        /// Usable when it reports at least one of the windows the app can display.
+        var hasKnownWindow: Bool {
+            windows.contains { $0.windowDurationMins == 300 || $0.windowDurationMins == 10080 }
         }
     }
     let rateLimits: Limit?
@@ -202,24 +210,26 @@ struct CodexRateLimits: Decodable {
 
     func snapshot() throws -> UsageSnapshot {
         let selected: Limit
-        if let main = rateLimits, main.hasRequiredWindows { selected = main }
-        else if let codex = rateLimitsByLimitId?["codex"], codex.hasRequiredWindows { selected = codex }
+        if let main = rateLimits, main.hasKnownWindow { selected = main }
+        else if let codex = rateLimitsByLimitId?["codex"], codex.hasKnownWindow { selected = codex }
         else {
-            let candidates = (rateLimitsByLimitId ?? [:]).values.filter(\.hasRequiredWindows)
+            let candidates = (rateLimitsByLimitId ?? [:]).values.filter(\.hasKnownWindow)
             guard candidates.count == 1, let only = candidates.first else { throw UsageProviderError.windowsMissing }
             selected = only
         }
-        func metric(_ minutes: Int) throws -> UsageMetric {
-            guard let window = selected.windows.first(where: { $0.windowDurationMins == minutes }) else {
-                throw UsageProviderError.windowsMissing
-            }
+        func metric(_ minutes: Int) throws -> UsageMetric? {
+            guard let window = try selected.window(minutes) else { return nil }
             guard window.usedPercent.isFinite, (0...100).contains(window.usedPercent) else { throw UsageProviderError.invalidUsage }
             if let reset = window.resetsAt, !reset.isFinite || reset <= 0 || reset > 253402300799 {
                 throw UsageProviderError.invalidUsage
             }
             return UsageMetric(usedPercent: window.usedPercent, resetAt: window.resetsAt.map(Date.init(timeIntervalSince1970:)))
         }
-        return try UsageSnapshot(fiveHour: metric(300), weekly: metric(10080), updatedAt: Date())
+        let fiveHour = try metric(300)
+        let weekly = try metric(10080)
+        // hasKnownWindow guarantees one of these, but never publish an empty snapshot.
+        guard fiveHour != nil || weekly != nil else { throw UsageProviderError.windowsMissing }
+        return UsageSnapshot(fiveHour: fiveHour, weekly: weekly, updatedAt: Date())
     }
 }
 
@@ -269,10 +279,11 @@ actor CodexUsageProvider: UsageProvider {
             let data = try await request("account/rateLimits/read", timeout: requestSeconds)
             do {
                 let snapshot = try JSONDecoder().decode(CodexRateLimits.self, from: data).snapshot()
+                let fiveHour = snapshot.fiveHour.map { "\(Int($0.usedPercent.rounded()))%" } ?? "n/a"
+                let weekly = snapshot.weekly.map { "\(Int($0.usedPercent.rounded()))%" } ?? "n/a"
                 AppLog.provider.log("""
                     Usage read in \(started.duration(to: .now).milliseconds, privacy: .public)ms: \
-                    5h used \(snapshot.fiveHour.usedPercent, format: .fixed(precision: 0), privacy: .public)%, \
-                    week used \(snapshot.weekly.usedPercent, format: .fixed(precision: 0), privacy: .public)%
+                    5h used \(fiveHour, privacy: .public), week used \(weekly, privacy: .public)
                     """)
                 return snapshot
             }

@@ -53,9 +53,10 @@ final class UsageAppDelegate: NSObject, NSApplicationDelegate {
             resolved = path
             AppLog.write("codex: \(path)")
             let snapshot = try await provider.fetchUsage()
-            let five = Int(snapshot.fiveHour.remainingPercent.rounded())
-            let week = Int(snapshot.weekly.remainingPercent.rounded())
-            AppLog.write("ok: 5h \(five)% remaining, week \(week)% remaining")
+            func remaining(_ metric: UsageMetric?) -> String {
+                metric.map { "\(Int($0.remainingPercent.rounded()))% remaining" } ?? "not reported"
+            }
+            AppLog.write("ok: 5h \(remaining(snapshot.fiveHour)), week \(remaining(snapshot.weekly))")
         } catch {
             report(error, resolved: resolved)
             status = 1
