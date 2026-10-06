@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Darwin
+import OSLog
 
 enum UsageProviderError: LocalizedError {
     case executableMissing, launchFailed, initializationTimeout, malformedResponse
@@ -20,29 +21,163 @@ enum UsageProviderError: LocalizedError {
         case .serverRejected: return "Codex could not retrieve usage. Try refreshing."
         }
     }
+
+    /// Broken setup rather than bad luck: retrying cannot fix these, so a failure on the very
+    /// first refresh is fatal. Timeouts, auth and server errors stay recoverable in place.
+    var isSetupFailure: Bool {
+        switch self {
+        case .executableMissing, .launchFailed, .serverExited: return true
+        default: return false
+        }
+    }
 }
 
 enum CodexExecutableResolver {
+    private static let currentBundlePath = "Contents/Resources/codex-cli/bin/codex"
+    private static let legacyBundlePath = "Contents/Resources/codex"
+    private static let maximumResourceSearchDepth = 4
+
     static func resolve() throws -> URL {
-        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + ["/opt/homebrew/bin", "/usr/local/bin", FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path]
-        for directory in paths where directory.hasPrefix("/") {
-            let url = URL(fileURLWithPath: directory).appendingPathComponent("codex")
-            if valid(url) { return url }
+        try resolve(
+            chatGPTApplications: installedChatGPTApplications(),
+            standaloneDirectories: installedStandaloneDirectories()
+        )
+    }
+
+    /// The explicit inputs make discovery deterministic and keep tests independent of software
+    /// installed on the developer's Mac.
+    static func resolve(
+        chatGPTApplications: [URL],
+        standaloneDirectories: [URL],
+        validationTimeout: TimeInterval = 2
+    ) throws -> URL {
+        for application in unique(chatGPTApplications) {
+            AppLog.provider.log("ChatGPT app located at \(application.path, privacy: .public)")
+            let candidates = bundleCandidates(in: application)
+            for (candidate, strategy) in candidates {
+                if validate(candidate, timeout: validationTimeout) {
+                    AppLog.provider.log("Selected Codex at \(candidate.path, privacy: .public) via \(strategy, privacy: .public)")
+                    return candidate
+                }
+            }
         }
-        if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-            let url = app.appendingPathComponent("Contents/Resources/codex")
-            if valid(url) { return url }
+        if chatGPTApplications.isEmpty {
+            AppLog.provider.notice("ChatGPT app was not located")
         }
-        let fallback = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
-        if valid(fallback) { return fallback }
+
+        for directory in unique(standaloneDirectories) {
+            let candidate = directory.appendingPathComponent("codex")
+            if validate(candidate, timeout: validationTimeout) {
+                AppLog.provider.log("Selected standalone Codex at \(candidate.path, privacy: .public)")
+                return candidate
+            }
+        }
+
+        AppLog.provider.error("No working Codex executable found after validating bundled and standalone candidates")
         throw UsageProviderError.executableMissing
     }
 
-    private static func valid(_ url: URL) -> Bool {
+    private static func installedChatGPTApplications() -> [URL] {
+        var applications: [URL] = []
+        if let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
+            applications.append(application)
+        }
+        // Keep the conventional installation location as a fallback when Launch Services has
+        // not indexed the app yet. Internal executable paths are resolved separately below.
+        let conventional = URL(fileURLWithPath: "/Applications/ChatGPT.app", isDirectory: true)
+        if FileManager.default.fileExists(atPath: conventional.path) {
+            applications.append(conventional)
+        }
+        return unique(applications)
+    }
+
+    private static func installedStandaloneDirectories() -> [URL] {
+        let pathDirectories = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+            .filter { $0.hasPrefix("/") }
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        return unique(pathDirectories + [
+            URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
+            URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin", isDirectory: true)
+        ])
+    }
+
+    private static func bundleCandidates(in application: URL) -> [(URL, String)] {
+        let current = application.appendingPathComponent(currentBundlePath)
+        let legacy = application.appendingPathComponent(legacyBundlePath)
+        var candidates = [(current, "current ChatGPT layout"), (legacy, "legacy ChatGPT layout")]
+        let knownPaths = Set(candidates.map { $0.0.standardizedFileURL.path })
+        let resources = application.appendingPathComponent("Contents/Resources", isDirectory: true)
+        let resourceDepth = resources.standardizedFileURL.pathComponents.count
+        guard let enumerator = FileManager.default.enumerator(
+            at: resources,
+            includingPropertiesForKeys: [.isRegularFileKey, .isExecutableKey],
+            options: [.skipsHiddenFiles]
+        ) else { return candidates }
+
+        var discovered: [URL] = []
+        for case let url as URL in enumerator {
+            let depth = url.standardizedFileURL.pathComponents.count - resourceDepth
+            if depth > maximumResourceSearchDepth {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard url.lastPathComponent == "codex", !knownPaths.contains(url.standardizedFileURL.path) else { continue }
+            discovered.append(url)
+        }
+        candidates.append(contentsOf: discovered.sorted { $0.path < $1.path }.map { ($0, "controlled Resources search") })
+        return candidates
+    }
+
+    private static func validate(_ url: URL, timeout: TimeInterval) -> Bool {
+        AppLog.provider.debug("Considering Codex candidate \(url.path, privacy: .public)")
         var directory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: url.path, isDirectory: &directory)
-            && !directory.boolValue && FileManager.default.isExecutableFile(atPath: url.path)
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory),
+              !directory.boolValue,
+              FileManager.default.isExecutableFile(atPath: url.path) else {
+            AppLog.provider.debug("Rejected missing or non-executable candidate \(url.path, privacy: .public)")
+            return false
+        }
+
+        let process = Process()
+        let stdout = Pipe(), stderr = Pipe()
+        process.executableURL = url
+        process.arguments = ["--version"]
+        process.standardOutput = stdout
+        process.standardError = stderr
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        do { try process.run() }
+        catch {
+            AppLog.provider.error("Rejected candidate that could not launch: \(url.path, privacy: .public)")
+            return false
+        }
+
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            if finished.wait(timeout: .now() + 0.2) != .success, process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            AppLog.provider.error("Rejected candidate whose --version timed out: \(url.path, privacy: .public)")
+            return false
+        }
+
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+            + stderr.fileHandleForReading.readDataToEndOfFile()
+        let version = String(data: output, encoding: .utf8)?.lowercased() ?? ""
+        guard process.terminationStatus == 0, version.contains("codex") else {
+            AppLog.provider.error("Rejected candidate whose --version validation failed: \(url.path, privacy: .public)")
+            return false
+        }
+        AppLog.provider.debug("Validated Codex candidate \(url.path, privacy: .public)")
+        return true
+    }
+
+    private static func unique(_ urls: [URL]) -> [URL] {
+        var paths = Set<String>()
+        return urls.filter { paths.insert($0.standardizedFileURL.path).inserted }
     }
 }
 
@@ -57,9 +192,17 @@ struct CodexRateLimits: Decodable {
         let primary: Window?
         let secondary: Window?
         var windows: [Window] { [primary, secondary].compactMap { $0 } }
-        var hasRequiredWindows: Bool {
-            windows.filter { $0.windowDurationMins == 300 }.count == 1
-                && windows.filter { $0.windowDurationMins == 10080 }.count == 1
+
+        /// Exactly one window per duration, so an ambiguous pair is never silently halved.
+        func window(_ minutes: Int) throws -> Window? {
+            let matches = windows.filter { $0.windowDurationMins == minutes }
+            guard matches.count <= 1 else { throw UsageProviderError.windowsMissing }
+            return matches.first
+        }
+
+        /// Usable when it reports at least one of the windows the app can display.
+        var hasKnownWindow: Bool {
+            windows.contains { $0.windowDurationMins == 300 || $0.windowDurationMins == 10080 }
         }
     }
     let rateLimits: Limit?
@@ -67,24 +210,26 @@ struct CodexRateLimits: Decodable {
 
     func snapshot() throws -> UsageSnapshot {
         let selected: Limit
-        if let main = rateLimits, main.hasRequiredWindows { selected = main }
-        else if let codex = rateLimitsByLimitId?["codex"], codex.hasRequiredWindows { selected = codex }
+        if let main = rateLimits, main.hasKnownWindow { selected = main }
+        else if let codex = rateLimitsByLimitId?["codex"], codex.hasKnownWindow { selected = codex }
         else {
-            let candidates = (rateLimitsByLimitId ?? [:]).values.filter(\.hasRequiredWindows)
+            let candidates = (rateLimitsByLimitId ?? [:]).values.filter(\.hasKnownWindow)
             guard candidates.count == 1, let only = candidates.first else { throw UsageProviderError.windowsMissing }
             selected = only
         }
-        func metric(_ minutes: Int) throws -> UsageMetric {
-            guard let window = selected.windows.first(where: { $0.windowDurationMins == minutes }) else {
-                throw UsageProviderError.windowsMissing
-            }
+        func metric(_ minutes: Int) throws -> UsageMetric? {
+            guard let window = try selected.window(minutes) else { return nil }
             guard window.usedPercent.isFinite, (0...100).contains(window.usedPercent) else { throw UsageProviderError.invalidUsage }
             if let reset = window.resetsAt, !reset.isFinite || reset <= 0 || reset > 253402300799 {
                 throw UsageProviderError.invalidUsage
             }
             return UsageMetric(usedPercent: window.usedPercent, resetAt: window.resetsAt.map(Date.init(timeIntervalSince1970:)))
         }
-        return try UsageSnapshot(fiveHour: metric(300), weekly: metric(10080), updatedAt: Date())
+        let fiveHour = try metric(300)
+        let weekly = try metric(10080)
+        // hasKnownWindow guarantees one of these, but never publish an empty snapshot.
+        guard fiveHour != nil || weekly != nil else { throw UsageProviderError.windowsMissing }
+        return UsageSnapshot(fiveHour: fiveHour, weekly: weekly, updatedAt: Date())
     }
 }
 
@@ -122,18 +267,30 @@ actor CodexUsageProvider: UsageProvider {
     }
 
     private func performFetch() async throws -> UsageSnapshot {
+        let started = ContinuousClock.now
         do {
             if !ready {
                 try start()
                 _ = try await request("initialize", params: ["clientInfo": ["name": "chatgpt_usage_menu", "title": "ChatGPT Usage", "version": "1.0"]], timeout: initializationSeconds)
                 try send(["method": "initialized"])
                 ready = true
+                AppLog.provider.log("App Server initialized in \(started.duration(to: .now).milliseconds, privacy: .public)ms")
             }
             let data = try await request("account/rateLimits/read", timeout: requestSeconds)
-            do { return try JSONDecoder().decode(CodexRateLimits.self, from: data).snapshot() }
+            do {
+                let snapshot = try JSONDecoder().decode(CodexRateLimits.self, from: data).snapshot()
+                let fiveHour = snapshot.fiveHour.map { "\(Int($0.usedPercent.rounded()))%" } ?? "n/a"
+                let weekly = snapshot.weekly.map { "\(Int($0.usedPercent.rounded()))%" } ?? "n/a"
+                AppLog.provider.log("""
+                    Usage read in \(started.duration(to: .now).milliseconds, privacy: .public)ms: \
+                    5h used \(fiveHour, privacy: .public), week used \(weekly, privacy: .public)
+                    """)
+                return snapshot
+            }
             catch let error as UsageProviderError { throw error }
             catch { throw UsageProviderError.malformedResponse }
         } catch {
+            AppLog.provider.error("Fetch failed after \(started.duration(to: .now).milliseconds, privacy: .public)ms: \(error.logLabel, privacy: .public)")
             disconnect(error)
             throw error
         }
@@ -168,12 +325,21 @@ actor CodexUsageProvider: UsageProvider {
         }
         // A dead child must produce an error, never terminate the parent with SIGPIPE.
         _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-        child.terminationHandler = { [weak self] _ in
+        child.terminationHandler = { [weak self] finished in
+            AppLog.provider.debug("""
+                pid \(finished.processIdentifier, privacy: .public) exited, \
+                status \(finished.terminationStatus, privacy: .public)
+                """)
             Task { await self?.exited(generation: token) }
         }
         process = child; input = stdin; output = stdout
         do { try child.run() }
-        catch { disconnect(UsageProviderError.launchFailed); throw UsageProviderError.launchFailed }
+        catch {
+            AppLog.provider.error("Could not launch \(executable.path, privacy: .public)")
+            disconnect(UsageProviderError.launchFailed)
+            throw UsageProviderError.launchFailed
+        }
+        AppLog.provider.log("Launched \(executable.path, privacy: .public) as pid \(child.processIdentifier, privacy: .public)")
     }
 
     private func send(_ message: [String: Any]) throws {
@@ -229,6 +395,8 @@ actor CodexUsageProvider: UsageProvider {
 
     private func timedOut(_ id: Int, initializing: Bool) {
         guard pending[id] != nil else { return }
+        let limit = initializing ? initializationSeconds : requestSeconds
+        AppLog.provider.error("Request \(id, privacy: .public) timed out after \(limit, format: .fixed(precision: 1), privacy: .public)s")
         disconnect(initializing ? UsageProviderError.initializationTimeout : UsageProviderError.requestTimeout)
     }
     private func exited(generation token: UUID) {
@@ -236,6 +404,12 @@ actor CodexUsageProvider: UsageProvider {
     }
 
     private func disconnect(_ error: Error) {
+        if process != nil {
+            AppLog.provider.debug("""
+                Disconnecting on \(error.logLabel, privacy: .public), \
+                \(self.pending.count, privacy: .public) request(s) pending
+                """)
+        }
         generation = UUID(); ready = false; buffer.removeAll()
         deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()
         let requests = pending.values; pending.removeAll()

@@ -4,6 +4,15 @@
   <img src="IconSource/UsageBar-1024.png" width="160" height="160" alt="UsageBar app icon">
 </p>
 
+<p align="center">
+  <a href="https://github.com/queraga/usageBar/releases/latest"><img src="https://img.shields.io/github/v/release/queraga/usageBar?label=download&sort=semver" alt="Latest release"></a>
+  <a href="https://github.com/queraga/usageBar/actions/workflows/release.yml"><img src="https://github.com/queraga/usageBar/actions/workflows/release.yml/badge.svg?branch=main" alt="Build status on main"></a>
+<a href="https://github.com/queraga/usageBar/actions/workflows/ci.yml">
+  <img src="https://github.com/queraga/usageBar/actions/workflows/ci.yml/badge.svg" alt="CI status">
+</a>
+</p>
+
+
 Your AI usage limits, right in the macOS menu bar.
 
 **Currently supported: OpenAI Work & Codex**
@@ -25,7 +34,7 @@ UsageBar is a lightweight native macOS utility that keeps your remaining 5-hour 
 
 ## Installation
 
-1. Download the latest DMG from GitHub Releases.
+1. Download `UsageBar.dmg` from the [latest release](https://github.com/queraga/usageBar/releases/latest).
 2. Open `UsageBar.dmg`.
 3. Drag UsageBar to Applications.
 4. Launch UsageBar.
@@ -91,6 +100,19 @@ UsageBar itself:
 4. Build and run.
 
 UsageBar is written in Swift and SwiftUI and targets macOS 13 or later.
+
+Command line equivalents:
+
+```bash
+./Tests/run.sh             # provider and store tests
+Scripts/build.sh           # release/UsageBar.app
+Scripts/make-dmg.sh 0.2.0  # release/UsageBar-0.2.0.dmg
+```
+
+Pull requests and pushes to `main` and `develop` run the tests and a Release build on GitHub
+Actions. **Actions → CI → Run workflow** builds any branch on demand and attaches the DMG and
+zip as downloadable artifacts without publishing anything. Merging to `main` drafts a release
+for the version in `MARKETING_VERSION` — see [RELEASING.md](RELEASING.md).
 
 ## Architecture
 
