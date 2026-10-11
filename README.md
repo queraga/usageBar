@@ -124,4 +124,6 @@ for the version in `MARKETING_VERSION` — see [RELEASING.md](RELEASING.md).
 
 ## License
 
-License information will be added before the public release.
+UsageBar is licensed under the [Apache License 2.0](LICENSE) with the [Commons Clause](https://commonsclause.com/).
+
+You may use it anywhere, including at a company, and you may read, modify, and share the source. You may not sell UsageBar, or charge for a product or service whose value derives entirely or substantially from this code. That includes a renamed copy, and a paid app or hosted service that is basically UsageBar.
