@@ -3,6 +3,13 @@ import Darwin
 
 @main
 struct ProviderValidation {
+    /// Timeouts and waits are deliberately tight so the timeout cases stay fast. Slower machines
+    /// (CI runners paying a cold interpreter start) stretch them via USAGE_TEST_TIME_SCALE.
+    static let timeScale = ProcessInfo.processInfo.environment["USAGE_TEST_TIME_SCALE"]
+        .flatMap(Double.init) ?? 1
+    static func seconds(_ value: Double) -> Double { value * timeScale }
+    static func nanoseconds(_ value: Double) -> UInt64 { UInt64(seconds(value) * 1_000_000_000) }
+
     static func main() async throws {
         if CommandLine.arguments.contains("--live") {
             let provider = CodexUsageProvider()
@@ -10,7 +17,7 @@ struct ProviderValidation {
             do {
                 for _ in 0..<2 {
                     let s = try await provider.fetchUsage()
-                    print("Real: 5h left=\(s.fiveHour.remainingPercent), week left=\(s.weekly.remainingPercent), resets=\(s.fiveHour.resetAt!), \(s.weekly.resetAt!)")
+                    print("Real: 5h left=\(s.fiveHour?.remainingPercent as Any), week left=\(s.weekly?.remainingPercent as Any)")
                 }
             } catch { await provider.shutdown(); throw error }
             await provider.shutdown()
@@ -19,15 +26,16 @@ struct ProviderValidation {
         }
         let base = URL(fileURLWithPath: CommandLine.arguments[1])
         let state = URL(fileURLWithPath: ProcessInfo.processInfo.environment["USAGE_TEST_STATE"]!)
+        try testExecutableDiscovery(in: base)
         func make(_ mode: String) -> CodexUsageProvider {
-            CodexUsageProvider(executable: base.appendingPathComponent(mode), initializationTimeout: 0.4, requestTimeout: 0.4)
+            CodexUsageProvider(executable: base.appendingPathComponent(mode), initializationTimeout: seconds(0.4), requestTimeout: seconds(0.4))
         }
         func lines() throws -> [String] { try String(contentsOf: state, encoding: .utf8).split(separator: "\n").map(String.init) }
         let provider = make("good")
         async let a = provider.fetchUsage()
         async let b = provider.fetchUsage()
         let snapshots = try await [a,b]
-        precondition(snapshots.allSatisfy { $0.fiveHour.remainingPercent == 75 && $0.weekly.remainingPercent == 58 })
+        precondition(snapshots.allSatisfy { $0.fiveHour?.remainingPercent == 75 && $0.weekly?.remainingPercent == 58 })
         _ = try await provider.fetchUsage()
         let log = try lines()
         precondition(log.filter { $0.hasPrefix("start") }.count == 1)
@@ -59,13 +67,91 @@ struct ProviderValidation {
         await reconnect.shutdown()
         print("PASS: recovery on next refresh")
         let fallback = #"{"rateLimits":{"primary":null,"secondary":null},"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":57,"windowDurationMins":10080,"resetsAt":1789910299},"secondary":{"usedPercent":47,"windowDurationMins":300,"resetsAt":1789585715}}}}"#
-        let decoded = try JSONDecoder().decode(CodexRateLimits.self,from:Data(fallback.utf8)).snapshot()
-        precondition(decoded.fiveHour.remainingPercent == 53)
-        for raw in [fallback.replacingOccurrences(of:"57",with:"157"), fallback.replacingOccurrences(of:"10080",with:"60")] {
-            do { _ = try JSONDecoder().decode(CodexRateLimits.self,from:Data(raw.utf8)).snapshot(); fatalError() } catch {}
+        func snapshot(_ raw: String) throws -> UsageSnapshot {
+            try JSONDecoder().decode(CodexRateLimits.self, from: Data(raw.utf8)).snapshot()
+        }
+        let decoded = try snapshot(fallback)
+        precondition(decoded.fiveHour?.remainingPercent == 53 && decoded.weekly?.remainingPercent == 43)
+        // Out-of-range usage and two windows claiming the same duration stay fatal.
+        for raw in [fallback.replacingOccurrences(of:"57",with:"157"),
+                    fallback.replacingOccurrences(of:"10080",with:"300")] {
+            do { _ = try snapshot(raw); fatalError("Expected failure") } catch {}
         }
         print("PASS: fallback selection and malformed metric rejection")
+        // An account reporting only one of the two windows is valid, not an error: the other
+        // window is simply absent. Unknown durations are ignored the same way.
+        let weeklyOnly = try snapshot(#"{"rateLimits":{"limitId":"codex","primary":{"usedPercent":12,"windowDurationMins":10080,"resetsAt":1790531876},"secondary":null}}"#)
+        precondition(weeklyOnly.weekly?.remainingPercent == 88 && weeklyOnly.fiveHour == nil)
+        let fiveHourOnly = try snapshot(fallback.replacingOccurrences(of:"10080",with:"60"))
+        precondition(fiveHourOnly.fiveHour?.remainingPercent == 53 && fiveHourOnly.weekly == nil)
+        // Nothing recognizable at all still fails, rather than publishing an empty snapshot.
+        for raw in [#"{"rateLimits":{"primary":{"usedPercent":5,"windowDurationMins":60,"resetsAt":null},"secondary":null}}"#,
+                    #"{"rateLimits":{"primary":null,"secondary":null}}"#] {
+            do { _ = try snapshot(raw); fatalError("Expected failure") }
+            catch { precondition(String(describing:error) == "windowsMissing", "Unexpected \(error)") }
+        }
+        print("PASS: partial windows accepted, unusable responses rejected")
         await testStore(base:base,state:state)
+    }
+
+    static func testExecutableDiscovery(in base: URL) throws {
+        let root = base.deletingLastPathComponent().appendingPathComponent("resolver")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        func executable(_ url: URL, version: String = "codex-cli 1.2.3", status: Int = 0) throws {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "#!/bin/sh\necho '\(version)'\nexit \(status)\n".write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+        func app(_ name: String) -> URL { root.appendingPathComponent(name + ".app", isDirectory: true) }
+        func current(_ application: URL) -> URL {
+            application.appendingPathComponent("Contents/Resources/codex-cli/bin/codex")
+        }
+        func legacy(_ application: URL) -> URL {
+            application.appendingPathComponent("Contents/Resources/codex")
+        }
+
+        let currentApp = app("Current")
+        try executable(current(currentApp))
+        let currentResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [currentApp], standaloneDirectories: [])
+        precondition(currentResolved.path == current(currentApp).path)
+
+        let legacyApp = app("Legacy")
+        try executable(legacy(legacyApp))
+        let legacyResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [legacyApp], standaloneDirectories: [])
+        precondition(legacyResolved.path == legacy(legacyApp).path)
+
+        let fallbackApp = app("BrokenCurrent")
+        try executable(current(fallbackApp), version: "broken installation", status: 1)
+        try executable(legacy(fallbackApp))
+        let fallbackResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [fallbackApp], standaloneDirectories: [])
+        precondition(fallbackResolved.path == legacy(fallbackApp).path)
+
+        let brokenStandalone = root.appendingPathComponent("broken-bin", isDirectory: true)
+        try executable(brokenStandalone.appendingPathComponent("codex"), version: "missing native binary", status: 127)
+        do {
+            _ = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [brokenStandalone])
+            fatalError("Broken standalone Codex was accepted")
+        } catch UsageProviderError.executableMissing {}
+        catch { fatalError("Unexpected discovery error: \(error)") }
+
+        let validStandalone = root.appendingPathComponent("valid-bin", isDirectory: true)
+        try executable(validStandalone.appendingPathComponent("codex"))
+        let standaloneResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [brokenStandalone, validStandalone])
+        precondition(standaloneResolved.path == validStandalone.appendingPathComponent("codex").path)
+
+        do {
+            _ = try CodexExecutableResolver.resolve(chatGPTApplications: [], standaloneDirectories: [])
+            fatalError("Missing Codex did not report an error")
+        } catch UsageProviderError.executableMissing {}
+        catch { fatalError("Unexpected discovery error: \(error)") }
+
+        let futureApp = app("Future")
+        let future = futureApp.appendingPathComponent("Contents/Resources/runtime/tools/codex")
+        try executable(future)
+        let futureResolved = try CodexExecutableResolver.resolve(chatGPTApplications: [futureApp], standaloneDirectories: [])
+        precondition(futureResolved.resolvingSymlinksInPath().path == future.resolvingSymlinksInPath().path)
+        print("PASS: executable discovery layouts, validation fallback, standalone, missing, and controlled search")
     }
     @MainActor static func testStore(base:URL,state:URL) async {
         let provider = CodexUsageProvider(executable:base.appendingPathComponent("good"))
@@ -73,13 +159,13 @@ struct ProviderValidation {
         let store = UsageStore(provider:provider)
         store.startAutomaticRefresh(interval:100_000_000)
         store.startAutomaticRefresh(interval:100_000_000)
-        try? await Task.sleep(nanoseconds:450_000_000)
+        try? await Task.sleep(nanoseconds:nanoseconds(0.45))
         precondition(store.snapshot != nil)
         let after = (try! String(contentsOf:state, encoding:.utf8)).split(separator:"\n").filter{$0.hasPrefix("start")}.count
         precondition(after == before+1)
         await store.shutdown()
         let count = try! String(contentsOf:state, encoding:.utf8)
-        try? await Task.sleep(nanoseconds:150_000_000)
+        try? await Task.sleep(nanoseconds:nanoseconds(0.15))
         precondition(count == (try! String(contentsOf:state, encoding:.utf8)))
         let faulty = FailsAfterSuccess()
         let stale = UsageStore(provider:faulty)

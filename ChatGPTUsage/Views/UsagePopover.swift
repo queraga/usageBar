@@ -11,8 +11,16 @@ struct UsagePopover: View {
                 Spacer()
             }
             if let snapshot = store.snapshot {
-                UsageRow(title: "5h limit", metric: snapshot.fiveHour)
-                UsageRow(title: "Week limit", metric: snapshot.weekly)
+                if let fiveHour = snapshot.fiveHour {
+                    UsageRow(title: "5h limit", metric: fiveHour)
+                } else {
+                    UnavailableRow(title: "5h limit")
+                }
+                if let weekly = snapshot.weekly {
+                    UsageRow(title: "Week limit", metric: weekly)
+                } else {
+                    UnavailableRow(title: "Week limit")
+                }
                 Text("Last updated: \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))")
                     .font(.caption).foregroundStyle(.secondary)
             } else if store.isRefreshing {
