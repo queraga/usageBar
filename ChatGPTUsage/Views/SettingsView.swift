@@ -17,12 +17,17 @@ struct SettingsView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            Toggle("Launch at login", isOn: Binding(
-                get: { loginItem.isEnabled },
-                set: { loginItem.setEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            HStack {
+                Text("Launch at login")
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { loginItem.isEnabled },
+                    set: { loginItem.setEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
 
             if loginItem.requiresApproval {
                 Text("Allow UsageBar in macOS Login Items to finish enabling startup.")

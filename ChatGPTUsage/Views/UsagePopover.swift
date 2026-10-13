@@ -45,6 +45,7 @@ struct UsagePopover: View {
         }
         .padding(16)
         .frame(width: 300)
+        .fixedSize(horizontal: false, vertical: true)
         .task { await store.refreshIfNeeded() }
     }
 }
