@@ -17,7 +17,9 @@ Your AI usage limits, right in the macOS menu bar.
 
 **Currently supported: OpenAI Work & Codex**
 
-<!-- Add UsageBar screenshot here -->
+<p align="center">
+  <img src="docs/screenshot.png" width="312" alt="UsageBar in the macOS menu bar, showing 98% of the weekly limit remaining">
+</p>
 
 UsageBar is a lightweight native macOS utility that keeps your remaining 5-hour and weekly usage visible without repeatedly opening another app or settings screen. It reads the limits exposed by the local Codex App Server.
 
