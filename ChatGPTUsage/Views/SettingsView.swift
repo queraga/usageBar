@@ -7,7 +7,7 @@ struct SettingsView: View {
     @AppStorage("menuBarMetric") private var selection = MenuMetric.week.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Show in menu bar:").font(.caption).foregroundStyle(.secondary)
             Picker("Show in menu bar", selection: $selection) {
                 ForEach(MenuMetric.allCases, id: \.rawValue) { metric in
@@ -16,6 +16,7 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .frame(maxWidth: .infinity)
 
             HStack {
                 Text("Launch at login")
@@ -41,6 +42,7 @@ struct SettingsView: View {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { loginItem.refreshStatus() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItem.refreshStatus()
