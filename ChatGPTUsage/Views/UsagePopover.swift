@@ -5,7 +5,7 @@ struct UsagePopover: View {
     @ObservedObject var store: UsageStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 Text("UsageBar").font(.headline)
                 Spacer()
@@ -22,7 +22,7 @@ struct UsagePopover: View {
                     UnavailableRow(title: "Week limit")
                 }
                 Text("Last updated: \(snapshot.updatedAt.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.secondary)
             } else if store.isRefreshing {
                 ProgressView("Loading usage…").controlSize(.small)
             }
@@ -31,7 +31,7 @@ struct UsagePopover: View {
             }
             Divider()
             DisclosureGroup("Settings") {
-                SettingsView().padding(.top, 8)
+                SettingsView().padding(.top, 6)
             }
             HStack {
                 Button(store.isRefreshing ? "Refreshing…" : "Refresh") {
@@ -45,6 +45,7 @@ struct UsagePopover: View {
         }
         .padding(16)
         .frame(width: 300)
+        .fixedSize(horizontal: false, vertical: true)
         .task { await store.refreshIfNeeded() }
     }
 }

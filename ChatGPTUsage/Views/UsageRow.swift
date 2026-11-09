@@ -22,11 +22,13 @@ struct UsageRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title).fontWeight(.medium)
                 Spacer()
-                Text("\(Int(metric.remainingPercent.rounded()))% left").monospacedDigit()
+                Text("\(Int(metric.remainingPercent.rounded()))% left")
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
             }
             ProgressView(value: metric.remainingPercent, total: 100)
                 .tint(statusColor)

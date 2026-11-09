@@ -7,7 +7,7 @@ struct SettingsView: View {
     @AppStorage("menuBarMetric") private var selection = MenuMetric.week.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Show in menu bar:").font(.caption).foregroundStyle(.secondary)
             Picker("Show in menu bar", selection: $selection) {
                 ForEach(MenuMetric.allCases, id: \.rawValue) { metric in
@@ -16,13 +16,19 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .frame(maxWidth: .infinity)
 
-            Toggle("Launch at login", isOn: Binding(
-                get: { loginItem.isEnabled },
-                set: { loginItem.setEnabled($0) }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            HStack {
+                Text("Launch at login")
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { loginItem.isEnabled },
+                    set: { loginItem.setEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
 
             if loginItem.requiresApproval {
                 Text("Allow UsageBar in macOS Login Items to finish enabling startup.")
@@ -36,6 +42,7 @@ struct SettingsView: View {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { loginItem.refreshStatus() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItem.refreshStatus()
